@@ -17,36 +17,36 @@ type Config struct {
 	Output   io.Writer
 }
 
-type Logger struct {
+type MyLogger struct {
 	zerolog.Logger
-	loggers   map[string]*Logger
 	loggersMu *sync.Mutex
 	aftaLevel bool
 }
 
-func NewLogger() *Logger {
-	return &Logger{
-		loggers:   make(map[string]*Logger),
+func NewLogger() *MyLogger {
+	return &MyLogger{
 		loggersMu: &sync.Mutex{},
 		aftaLevel: true,
 	}
 }
 
-func (l *Logger) DisableAFTA() {
+func (l *MyLogger) AFTA() *AftaLogger {
+	af := &AftaLogger{logger: l}
+	af.logger.Logger = af.logger.Logger.With().Str("type", "afta").Logger()
+	return af
+}
+
+func (l *MyLogger) DisableAFTA() {
 	l.aftaLevel = false
 }
 
-func (l *Logger) Init(config Config) *Logger {
+func (l *MyLogger) Init(config Config) *MyLogger {
 	l.loggersMu.Lock()
 	defer l.loggersMu.Unlock()
 
-	if existingLogger, exists := l.loggers[config.Category]; exists {
-		return existingLogger
-	}
-
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
-	var output zerolog.ConsoleWriter
+	var output io.Writer
 	if config.Output == nil {
 		filepath := fmt.Sprintf("/var/log/siem/%s/%s.log", config.Plugin, config.Category)
 
@@ -54,31 +54,29 @@ func (l *Logger) Init(config Config) *Logger {
 		if err != nil {
 			panic(fmt.Errorf("failed to open log file: %w", err))
 		}
-		output = zerolog.ConsoleWriter{Out: runLogFile}
+		output = runLogFile
 
 	} else {
-		output = zerolog.ConsoleWriter{Out: config.Output}
+		output = config.Output
 	}
 
 	newLogger := zerolog.New(output).With().Str("plugin", config.Plugin).Timestamp().Logger()
 	levelObj := getLogLevel(config.Level)
 	newLogger = newLogger.Level(levelObj)
 
-	logger := &Logger{Logger: newLogger, loggers: l.loggers, loggersMu: l.loggersMu}
-	l.loggers[config.Category] = logger
-
-	return logger
+	l.Logger = newLogger
+	return l
 }
 
-func (l *Logger) GetLogger(category string) *Logger {
-	l.loggersMu.Lock()
-	defer l.loggersMu.Unlock()
+// func (l *MyLogger) GetLogger(category string) *MyLogger {
+// 	l.loggersMu.Lock()
+// 	defer l.loggersMu.Unlock()
 
-	if logger, exists := l.loggers[category]; exists {
-		return logger
-	}
-	return nil
-}
+// 	if logger, exists := l.loggers[category]; exists {
+// 		return logger
+// 	}
+// 	return nil
+// }
 
 func getLogLevel(level string) zerolog.Level {
 	switch strings.ToLower(level) {

@@ -1,20 +1,18 @@
 package logger
 
 import (
+	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 )
 
-func (l *Logger) AFTA() *AftaLogger {
-	return &AftaLogger{logger: &Logger{Logger: l.With().Str("type", "afta").Logger(), aftaLevel: l.aftaLevel}}
-}
-
 type AftaLogger struct {
-	logger *Logger
+	logger *MyLogger
 }
 
 type AftaStatement struct {
-	logger *Logger
+	logger *MyLogger
 	action string
 	msg    string
 }
@@ -30,50 +28,51 @@ func (l *AftaLogger) NewFieldChange(field string, oldVal, newVal any) FieldChang
 }
 
 func (l *AftaLogger) Create(entity string, id any) *AftaStatement {
-	return &AftaStatement{
-		logger: &Logger{
-			Logger: l.logger.With().
-				Str("entity", entity).
-				Any("record_id", id).
-				Logger(),
-		},
+	s := &AftaStatement{
+		logger: l.logger,
 		action: "CREATE",
 	}
+	s.logger.Logger = l.logger.With().
+		Str("entity", entity).
+		Any("record_id", id).
+		Logger()
+	return s
 }
 
 func (l *AftaLogger) Update(entity string, id any) *AftaStatement {
-	return &AftaStatement{
-		logger: &Logger{
-			Logger: l.logger.With().
-				Str("entity", entity).
-				Any("record_id", id).
-				Logger(),
-		},
+	s := &AftaStatement{
+		logger: l.logger,
 		action: "UPDATE",
 	}
+	s.logger.Logger = l.logger.With().
+		Str("entity", entity).
+		Any("record_id", id).
+		Logger()
+
+	return s
 }
 
 func (l *AftaLogger) Message(msg string) *AftaStatement {
-	return &AftaStatement{
-		logger: &Logger{
-			Logger: l.logger.With().
-				Logger(),
-		},
+	s := &AftaStatement{
+		logger: l.logger,
 		msg:    msg,
 		action: "MESSAGE",
 	}
+	s.logger.Logger = l.logger.With().Logger()
+	return s
 }
 
 func (l *AftaLogger) Delete(entity string, id any) *AftaStatement {
-	return &AftaStatement{
-		logger: &Logger{
-			Logger: l.logger.With().
-				Str("entity", entity).
-				Any("record_id", id).
-				Logger(),
-		},
+	s := &AftaStatement{
+		logger: l.logger,
 		action: "DELETE",
 	}
+	s.logger.Logger = l.logger.With().
+		Str("entity", entity).
+		Any("record_id", id).
+		Logger()
+
+	return s
 }
 
 func (stm *AftaStatement) WithChanges(fieldsChange ...FieldChange) *AftaStatement {
@@ -83,26 +82,95 @@ func (stm *AftaStatement) WithChanges(fieldsChange ...FieldChange) *AftaStatemen
 	return stm
 }
 
-func (stm *AftaStatement) WithModel(model interface{}) *AftaStatement {
-	var arr []FieldChange
-
-	val := reflect.ValueOf(model)
-	if val.Kind() == reflect.Ptr {
-		val = val.Elem()
+func (stm *AftaStatement) WithModel(models ...interface{}) *AftaStatement {
+	if len(models) == 0 || len(models) > 2 {
+		panic(fmt.Sprintf("models count is invalid: %d", len(models)))
 	}
 
-	for i := 0; i < val.NumField(); i++ {
-		field := val.Type().Field(i)
-		fieldValue := val.Field(i)
+	var changes []FieldChange
 
-		arr = append(arr, FieldChange{
-			Field:    field.Name,
-			NewValue: fieldValue.Interface(),
-		})
+	newModel := models[0]
+	newVal := reflect.ValueOf(newModel)
+	if newVal.Kind() == reflect.Ptr {
+		newVal = newVal.Elem()
 	}
 
-	stm.logger.Logger = stm.logger.With().Interface("changes", arr).Logger()
+	if len(models) == 2 && models[1] != nil {
+		oldModel := models[1]
+		oldVal := reflect.ValueOf(oldModel)
+		if oldVal.Kind() == reflect.Ptr {
+			oldVal = oldVal.Elem()
+		}
+
+		for i := 0; i < newVal.NumField(); i++ {
+			// fmt.Println("i : ", i)
+			field := newVal.Type().Field(i)
+			newFieldValue := newVal.Field(i).Interface()
+			oldFieldValue := oldVal.Field(i).Interface()
+
+			// if newFieldValue != oldFieldValue {
+			if !CompareTwoValues(newFieldValue, oldFieldValue) {
+				changes = append(changes, FieldChange{
+					Field:    field.Name,
+					OldValue: filterFields(oldFieldValue),
+					NewValue: filterFields(newFieldValue),
+				})
+			}
+		}
+	} else {
+		for i := 0; i < newVal.NumField(); i++ {
+			field := newVal.Type().Field(i)
+			newFieldValue := newVal.Field(i).Interface()
+
+			changes = append(changes, FieldChange{
+				Field:    field.Name,
+				NewValue: filterFields(newFieldValue),
+			})
+		}
+	}
+
+	stm.logger.Logger = stm.logger.With().Interface("changes", changes).Logger()
 	return stm
+}
+
+func filterFields(st interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	val := reflect.ValueOf(st)
+	typ := reflect.TypeOf(st)
+
+	if val.Kind() == reflect.Struct {
+		for i := 0; i < val.NumField(); i++ {
+			field := typ.Field(i)
+			fieldValue := val.Field(i)
+
+			if tag, ok := field.Tag.Lookup("afta"); ok {
+				if tag == "-" {
+					continue
+				} else if strings.HasPrefix(tag, "ref:") {
+					refFieldName := strings.TrimPrefix(tag, "ref:")
+					refField := val.FieldByName(refFieldName)
+					if refField.IsValid() {
+						result[field.Name] = refField.Interface()
+					}
+					continue
+				}
+			}
+
+			result[field.Name] = fieldValue.Interface()
+		}
+	}
+	return result
+}
+
+func CompareTwoValues(a, b interface{}) bool {
+	// بررسی نوع داده‌ها
+	if reflect.TypeOf(a) != reflect.TypeOf(b) {
+		return false
+	}
+
+	// استفاده از reflect.DeepEqual برای مقایسه عمیق
+	return reflect.DeepEqual(a, b)
 }
 
 func (stm *AftaStatement) WithRequestHeader(header http.Header) *AftaStatement {
@@ -123,6 +191,7 @@ func (stm *AftaStatement) WithRecordID(id any) *AftaStatement {
 }
 
 func (stm *AftaStatement) Log() {
+
 	if !stm.logger.aftaLevel {
 		return
 	}
