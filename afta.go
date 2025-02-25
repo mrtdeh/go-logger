@@ -191,6 +191,9 @@ func (stm *AftaStatement) WithRecordID(id any) *AftaStatement {
 }
 
 func (stm *AftaStatement) Log() {
+	if stm.logger.mock {
+		return
+	}
 
 	if !stm.logger.aftaLevel {
 		return

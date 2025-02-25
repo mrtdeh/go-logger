@@ -21,6 +21,7 @@ type MyLogger struct {
 	zerolog.Logger
 	loggersMu *sync.Mutex
 	aftaLevel bool
+	mock      bool
 }
 
 func NewLogger() *MyLogger {
@@ -38,6 +39,12 @@ func (l *MyLogger) AFTA() *AftaLogger {
 
 func (l *MyLogger) DisableAFTA() {
 	l.aftaLevel = false
+}
+
+func (l *MyLogger) Mock() *MyLogger {
+	l.Logger = zerolog.New(io.Discard)
+	l.mock = true
+	return l
 }
 
 func (l *MyLogger) Init(config Config) *MyLogger {
